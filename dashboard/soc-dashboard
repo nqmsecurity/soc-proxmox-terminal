@@ -567,29 +567,37 @@ view_network() {
     printf "${CYAN}│${RESET} DNS           %b\n" "$dns_status"
 
     echo "${CYAN}│${RESET}"
+
     echo "${CYAN}│${RESET} ${BOLD}${WHITE}Virtual interfaces${RESET}"
     echo "${CYAN}│${RESET}"
 
-    printf "${CYAN}│${RESET} LXC 100       "
-    if ip link show veth100i0 >/dev/null 2>&1; then
-        printf "${GREEN}🟢   PRESENT${RESET}\n"
-    else
-        printf "${YELLOW}🟡   N/A${RESET}\n"
-    fi
+    # LXC virtual interfaces
+    while read -r vmid status name; do
+        [ -z "$vmid" ] && continue
 
-    printf "${CYAN}│${RESET} VM 120        "
-    if ip link show tap120i0 >/dev/null 2>&1; then
-        printf "${GREEN}🟢   PRESENT${RESET}\n"
-    else
-        printf "${YELLOW}🟡   N/A${RESET}\n"
-    fi
+        printf "${CYAN}│${RESET} LXC %-8s " "$vmid"
 
-    printf "${CYAN}│${RESET} VM 121        "
-    if ip link show tap121i0 >/dev/null 2>&1; then
-        printf "${GREEN}🟢   PRESENT${RESET}\n"
-    else
-        printf "${YELLOW}🟡   N/A${RESET}\n"
-    fi
+        if ip link show "veth${vmid}i0" >/dev/null 2>&1; then
+            printf "${GREEN}🟢   PRESENT${RESET}\n"
+        else
+            printf "${YELLOW}🟡   N/A${RESET}\n"
+        fi
+    done < <(pct list | awk 'NR > 1 {print $1, $2, $3}')
+
+    # VM virtual interfaces
+    while read -r vmid status name; do
+        [ -z "$vmid" ] && continue
+
+        printf "${CYAN}│${RESET} VM  %-8s " "$vmid"
+
+        if ip link show "tap${vmid}i0" >/dev/null 2>&1; then
+            printf "${GREEN}🟢   PRESENT${RESET}\n"
+        else
+            printf "${YELLOW}🟡   N/A${RESET}\n"
+        fi
+    done < <(qm list | awk 'NR > 1 {print $1, $3, $2}')
+
+
 
     echo "${CYAN}│${RESET}"
     echo "${CYAN}└──────────────────────────────────────────────────────────────${RESET}"
