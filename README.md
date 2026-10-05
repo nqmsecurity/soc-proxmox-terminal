@@ -50,12 +50,24 @@ Incluye:
 
 Basada en el Dashboard V5.
 
-Será la evolución del dashboard con información ampliada de:
+Incluye:
 
-- Storage
-- Network
-- SOC
-- detección de servicios
+- Dashboard interactivo mejorado
+- Menú alineado independientemente del ancho de los emojis
+- Información ampliada del almacenamiento Proxmox
+- Conversión de capacidades a GiB
+- Información del filesystem raíz
+- Información ampliada de red
+- Estado de interfaces principales
+- Estado del bridge `vmbr0`
+- Gateway y tabla de rutas
+- Verificación de conectividad
+- Verificación DNS
+- Detección de interfaces virtuales de VMs y LXC
+- Indicadores visuales de estado
+- Mejoras de consistencia visual del dashboard
+
+Esta versión se establece como la versión estable actual del proyecto.
 
 ## Requisitos
 
