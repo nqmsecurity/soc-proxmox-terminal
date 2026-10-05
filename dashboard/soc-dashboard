@@ -1,0 +1,600 @@
+#!/usr/bin/env bash
+
+# ============================================================
+# SOC PROXMOX DASHBOARD
+# Version 4.0
+# ============================================================
+
+REFRESH=3
+
+NODE="$(hostname)"
+
+# ============================================================
+# Colores
+# ============================================================
+
+RESET=$'\033[0m'
+BOLD=$'\033[1m'
+
+RED=$'\033[1;31m'
+GREEN=$'\033[1;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[1;34m'
+CYAN=$'\033[1;36m'
+WHITE=$'\033[1;37m'
+GRAY=$'\033[0;37m'
+
+# ============================================================
+# Información básica
+# ============================================================
+
+get_ip() {
+    ip -4 addr show vmbr0 2>/dev/null |
+        awk '/inet / {print $2; exit}'
+}
+
+get_gateway() {
+    ip route 2>/dev/null |
+        awk '/default/ {print $3; exit}'
+}
+
+get_uptime() {
+    uptime -p 2>/dev/null | sed 's/^up //'
+}
+
+get_load() {
+    awk '{print $1}' /proc/loadavg
+}
+
+get_pve_version() {
+    pveversion |
+        sed -n 's#pve-manager/\([^/]*\).*#\1#p'
+}
+
+get_cpu() {
+
+    read -r _ u n s i io irq sirq st _ _ < /proc/stat
+
+    total1=$((u+n+s+i+io+irq+sirq+st))
+    idle1=$((i+io))
+
+    sleep 0.3
+
+    read -r _ u n s i io irq sirq st _ _ < /proc/stat
+
+    total2=$((u+n+s+i+io+irq+sirq+st))
+    idle2=$((i+io))
+
+    total=$((total2-total1))
+    idle=$((idle2-idle1))
+
+    if (( total > 0 )); then
+        echo $((100*(total-idle)/total))
+    else
+        echo 0
+    fi
+}
+
+get_memory() {
+    free -m | awk '/^Mem:/ {
+        printf "%.1f %.1f %.0f",
+        $3/1024,
+        $2/1024,
+        ($3/$2)*100
+    }'
+}
+
+get_disk() {
+    df -P / | awk 'NR==2 {
+        gsub("%","",$5)
+        printf "%s %.1f %.1f",
+        $5,
+        $3/1024/1024,
+        $4/1024/1024
+    }'
+}
+
+# ============================================================
+# Barra
+# ============================================================
+
+usage_bar() {
+
+    local value="$1"
+    local width=20
+
+    local filled=$((value*width/100))
+    local empty=$((width-filled))
+
+    printf "["
+
+    if (( filled > 0 )); then
+        printf "%0.s█" $(seq 1 "$filled")
+    fi
+
+    if (( empty > 0 )); then
+        printf "%0.s░" $(seq 1 "$empty")
+    fi
+
+    printf "]"
+}
+
+# ============================================================
+# Estado de servicios
+# ============================================================
+
+service_status() {
+
+    if systemctl is-active --quiet "$1" 2>/dev/null; then
+        printf "${GREEN}🟢 ACTIVE${RESET}"
+    else
+        printf "${RED}🔴 DOWN${RESET}"
+    fi
+}
+
+# ============================================================
+# Encabezado
+# ============================================================
+
+header() {
+
+    clear
+
+    local ip
+    ip="$(get_ip)"
+
+    echo
+    echo "${CYAN}┌──────────────────────────────────────────────────────────────${RESET}"
+    printf "${CYAN}│${RESET}       ${BOLD}${WHITE}🖥️  SOC PROXMOX DASHBOARD${RESET}\n"
+    printf "${CYAN}│${RESET}       ${GRAY}%s  •  %s${RESET}\n" "$NODE" "$ip"
+    echo "${CYAN}├──────────────────────────────────────────────────────────────${RESET}"
+}
+
+# ============================================================
+# Vista principal
+# ============================================================
+
+view_overview() {
+
+    header
+
+    local cpu
+    local mem_used
+    local mem_total
+    local mem_pct
+    local disk_pct
+    local disk_used
+    local disk_free
+    local load
+    local uptime
+    local pve
+    local kernel
+
+    cpu="$(get_cpu)"
+
+    read -r mem_used mem_total mem_pct <<< "$(get_memory)"
+    read -r disk_pct disk_used disk_free <<< "$(get_disk)"
+
+    load="$(get_load)"
+    uptime="$(get_uptime)"
+    pve="$(get_pve_version)"
+    kernel="$(uname -r)"
+
+    printf "${CYAN}│${RESET} ${BOLD}${WHITE}🧠 SYSTEM${RESET}\n"
+    echo
+
+    printf "${CYAN}│${RESET} CPU       ${BOLD}%3s %%${RESET}       RAM       ${BOLD}%4.1f / %4.1f GB${RESET}\n" \
+        "$cpu" "$mem_used" "$mem_total"
+
+    printf "${CYAN}│${RESET}           %s\n" "$(usage_bar "$cpu")"
+
+    echo
+
+    printf "${CYAN}│${RESET} LOAD      ${BOLD}%-6s${RESET}       DISK      ${BOLD}%3s %%${RESET}\n" \
+        "$load" "$disk_pct"
+
+    printf "${CYAN}│${RESET}           %s\n" "$(usage_bar "$disk_pct")"
+
+    echo
+
+    printf "${CYAN}│${RESET} UPTIME    ${BOLD}%-18s${RESET} PVE       ${BOLD}%s${RESET}\n" \
+        "$uptime" "$pve"
+
+    printf "${CYAN}│${RESET} KERNEL    ${BOLD}%s${RESET}\n" "$kernel"
+
+    echo
+    echo "${CYAN}├──────────────────────────────────────────────────────────────${RESET}"
+
+    printf "${CYAN}│${RESET} ${BOLD}${WHITE}🖧  VIRTUAL MACHINES${RESET}\n"
+    echo
+
+    while read -r VMID NAME STATUS MEM; do
+
+        [ -z "$VMID" ] && continue
+
+        CORES=$(qm config "$VMID" 2>/dev/null |
+            awk -F': ' '/^cores:/ {print $2; exit}')
+
+        [ -z "$CORES" ] && CORES="-"
+
+        if [ "$STATUS" = "running" ]; then
+            STATE="${GREEN}🟢 RUNNING${RESET}"
+        else
+            STATE="${RED}🔴 $STATUS${RESET}"
+        fi
+
+        printf "${CYAN}│${RESET} %-4s %-22s %b   %s CPU   %s MB\n" \
+            "$VMID" "$NAME" "$STATE" "$CORES" "$MEM"
+
+    done < <(
+        qm list 2>/dev/null |
+        awk 'NR>1 && $1 ~ /^[0-9]+$/ {
+            print $1,$2,$3,$4
+        }'
+    )
+
+    echo
+    echo "${CYAN}├──────────────────────────────────────────────────────────────${RESET}"
+
+    printf "${CYAN}│${RESET} ${BOLD}${WHITE}📦  CONTAINERS${RESET}\n"
+    echo
+
+    while read -r CTID STATUS NAME; do
+
+        [ -z "$CTID" ] && continue
+
+        CORES=$(pct config "$CTID" 2>/dev/null |
+            awk -F': ' '/^cores:/ {print $2; exit}')
+
+        MEMORY=$(pct config "$CTID" 2>/dev/null |
+            awk -F': ' '/^memory:/ {print $2; exit}')
+
+        [ -z "$CORES" ] && CORES="-"
+        [ -z "$MEMORY" ] && MEMORY="-"
+
+        if [ "$STATUS" = "running" ]; then
+            STATE="${GREEN}🟢 RUNNING${RESET}"
+        else
+            STATE="${RED}🔴 $STATUS${RESET}"
+        fi
+
+        printf "${CYAN}│${RESET} %-4s %-22s %b   %s CPU   %s MB\n" \
+            "$CTID" "$NAME" "$STATE" "$CORES" "$MEMORY"
+
+    done < <(
+        pct list 2>/dev/null |
+        awk 'NR>1 && $1 ~ /^[0-9]+$/ {
+            print $1,$2,$3
+        }'
+    )
+
+    echo
+    echo "${CYAN}├──────────────────────────────────────────────────────────────${RESET}"
+
+    printf "${CYAN}│${RESET} ${BOLD}${WHITE}🌐 NETWORK${RESET}\n"
+    echo
+
+    printf "${CYAN}│${RESET} vmbr0      ${BOLD}%s${RESET}\n" "$(get_ip)"
+    printf "${CYAN}│${RESET} Gateway    ${BOLD}%s${RESET}\n" "$(get_gateway)"
+
+    echo
+    echo "${CYAN}├──────────────────────────────────────────────────────────────${RESET}"
+
+    printf "${CYAN}│${RESET} ${BOLD}${WHITE}⚙️  HOST SERVICES${RESET}\n"
+    echo
+
+    printf "${CYAN}│${RESET} Proxmox      ${GREEN}🟢 ACTIVE${RESET}     SSH        %b\n" \
+        "$(service_status ssh)"
+
+    printf "${CYAN}│${RESET} pvedaemon    %b     pvestatd   %b\n" \
+        "$(service_status pvedaemon)" \
+        "$(service_status pvestatd)"
+
+    echo
+    echo "${CYAN}├──────────────────────────────────────────────────────────────${RESET}"
+
+    printf "${CYAN}│${RESET} ${BOLD}${WHITE}MENU${RESET}\n"
+    printf "${CYAN}│${RESET}\n"
+    printf "${CYAN}│${RESET}  [1] 🖥️  Node       [2] 🖧  VMs       [3] 📦  LXC\n"
+    printf "${CYAN}│${RESET}  [4] 💾 Storage     [5] 🌐 Network    [6] ⚙️  Services\n"
+    printf "${CYAN}│${RESET}  [7] 🛡️  SOC        [R] 🔄 Refresh    [0] ❌ Exit\n"
+
+    echo "${CYAN}└──────────────────────────────────────────────────────────────${RESET}"
+
+    echo
+}
+
+# ============================================================
+# Node
+# ============================================================
+
+view_node() {
+
+    header
+
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}🖥️  NODE INFORMATION${RESET}"
+    echo
+
+    printf "${CYAN}│${RESET} Hostname       : ${BOLD}%s${RESET}\n" "$NODE"
+    printf "${CYAN}│${RESET} IP             : ${BOLD}%s${RESET}\n" "$(get_ip)"
+    printf "${CYAN}│${RESET} Gateway        : ${BOLD}%s${RESET}\n" "$(get_gateway)"
+    printf "${CYAN}│${RESET} Proxmox        : ${BOLD}%s${RESET}\n" "$(get_pve_version)"
+    printf "${CYAN}│${RESET} Kernel         : ${BOLD}%s${RESET}\n" "$(uname -r)"
+    printf "${CYAN}│${RESET} Uptime         : ${BOLD}%s${RESET}\n" "$(get_uptime)"
+    printf "${CYAN}│${RESET} Load           : ${BOLD}%s${RESET}\n" "$(get_load)"
+
+    echo
+
+    free -h |
+        sed 's/^/│ /'
+
+    echo
+
+    df -hT |
+        sed 's/^/│ /'
+
+    echo
+    echo "${CYAN}└──────────────────────────────────────────────────────────────${RESET}"
+}
+
+# ============================================================
+# VMs
+# ============================================================
+
+view_vms() {
+
+    header
+
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}🖧  VIRTUAL MACHINES${RESET}"
+    echo
+
+    qm list
+
+    echo
+    echo "${CYAN}│${RESET} ${GRAY}Configuración detallada disponible por VMID.${RESET}"
+    echo
+    echo "${CYAN}└──────────────────────────────────────────────────────────────${RESET}"
+}
+
+# ============================================================
+# LXC
+# ============================================================
+
+view_lxc() {
+
+    header
+
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}📦  CONTAINERS${RESET}"
+    echo
+
+    pct list
+
+    echo
+
+    while read -r CTID STATUS NAME; do
+
+        [ -z "$CTID" ] && continue
+
+        echo "${CYAN}──────────────────────────────────────────────────────────────${RESET}"
+
+        echo "${BOLD}${WHITE}📦 CT ${CTID} — ${NAME}${RESET}"
+
+        pct config "$CTID" |
+            grep -E '^(cores|memory|swap|rootfs|net[0-9]+|ostype):'
+
+    done < <(
+        pct list 2>/dev/null |
+        awk 'NR>1 && $1 ~ /^[0-9]+$/ {
+            print $1,$2,$3
+        }'
+    )
+
+    echo
+    echo "${CYAN}└──────────────────────────────────────────────────────────────${RESET}"
+}
+
+# ============================================================
+# Storage
+# ============================================================
+
+view_storage() {
+
+    header
+
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}💾  STORAGE${RESET}"
+    echo
+
+    pvesm status 2>/dev/null
+
+    echo
+
+    echo "${BOLD}${WHITE}Filesystem:${RESET}"
+    df -hT
+
+    echo
+    echo "${CYAN}└──────────────────────────────────────────────────────────────${RESET}"
+}
+
+# ============================================================
+# Network
+# ============================================================
+
+view_network() {
+
+    header
+
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}🌐  NETWORK${RESET}"
+    echo
+
+    echo "${BOLD}${WHITE}Interfaces:${RESET}"
+    ip -br addr
+
+    echo
+    echo "${BOLD}${WHITE}Routes:${RESET}"
+    ip route
+
+    echo
+    echo "${BOLD}${WHITE}Bridge:${RESET}"
+    ip -br link show vmbr0
+
+    echo
+    echo "${CYAN}└──────────────────────────────────────────────────────────────${RESET}"
+}
+
+# ============================================================
+# Services
+# ============================================================
+
+view_services() {
+
+    header
+
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}⚙️  HOST SERVICES${RESET}"
+    echo
+
+    printf "${CYAN}│${RESET} SSH        %b\n" "$(service_status ssh)"
+    printf "${CYAN}│${RESET} pvedaemon  %b\n" "$(service_status pvedaemon)"
+    printf "${CYAN}│${RESET} pvestatd   %b\n" "$(service_status pvestatd)"
+    printf "${CYAN}│${RESET} pveproxy   %b\n" "$(service_status pveproxy)"
+    printf "${CYAN}│${RESET} pvescheduler %b\n" "$(service_status pvescheduler)"
+
+    echo
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}Failed services:${RESET}"
+    systemctl --failed --no-legend --no-pager 2>/dev/null
+
+    echo
+    echo "${CYAN}└──────────────────────────────────────────────────────────────${RESET}"
+}
+
+# ============================================================
+# SOC
+# ============================================================
+
+view_soc() {
+
+    header
+
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}🛡️  SOC SERVICES${RESET}"
+    echo
+
+    printf "${CYAN}│${RESET} 📦 Wazuh LXC 100   "
+
+    if pct status 100 2>/dev/null | grep -q "status: running"; then
+        printf "${GREEN}🟢 RUNNING${RESET}\n"
+    else
+        printf "${RED}🔴 STOPPED${RESET}\n"
+    fi
+
+    printf "${CYAN}│${RESET} 🐳 Docker         "
+
+    if pct exec 100 -- systemctl is-active docker >/dev/null 2>&1; then
+        printf "${GREEN}🟢 ACTIVE${RESET}\n"
+    else
+        printf "${YELLOW}🟡 UNKNOWN${RESET}\n"
+    fi
+
+    echo
+
+    printf "${CYAN}│${RESET} Esta sección se ampliará posteriormente con:\n"
+    printf "${CYAN}│${RESET}   🛡️  Wazuh\n"
+    printf "${CYAN}│${RESET}   📊 Prometheus\n"
+    printf "${CYAN}│${RESET}   📈 Grafana\n"
+    printf "${CYAN}│${RESET}   📡 NDR\n"
+    printf "${CYAN}│${RESET}   🧠 CTI\n"
+    printf "${CYAN}│${RESET}   ⚡ SOAR\n"
+
+    echo
+    echo "${CYAN}└──────────────────────────────────────────────────────────────${RESET}"
+}
+
+# ============================================================
+# Pausa
+# ============================================================
+
+pause_screen() {
+
+    echo
+    read -r -p "Presiona ENTER para volver al menú..."
+}
+
+# ============================================================
+# Menú
+# ============================================================
+
+menu() {
+
+    while true; do
+
+        view_overview
+
+        printf "Selecciona una opción: "
+
+        read -r OPTION
+
+        case "$OPTION" in
+
+            1)
+                view_node
+                pause_screen
+                ;;
+
+            2)
+                view_vms
+                pause_screen
+                ;;
+
+            3)
+                view_lxc
+                pause_screen
+                ;;
+
+            4)
+                view_storage
+                pause_screen
+                ;;
+
+            5)
+                view_network
+                pause_screen
+                ;;
+
+            6)
+                view_services
+                pause_screen
+                ;;
+
+            7)
+                view_soc
+                pause_screen
+                ;;
+
+            r|R)
+                continue
+                ;;
+
+            0)
+                clear
+                echo
+                echo "Dashboard detenido."
+                echo
+                exit 0
+                ;;
+
+            *)
+                echo
+                echo "Opción no válida."
+                sleep 1
+                ;;
+
+        esac
+
+    done
+}
+
+# ============================================================
+# Inicio
+# ============================================================
+
+trap 'clear; echo; echo "Dashboard detenido."; echo; exit 0' INT TERM
+
+menu
