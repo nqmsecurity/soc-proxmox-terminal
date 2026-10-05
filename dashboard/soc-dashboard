@@ -84,6 +84,20 @@ get_memory() {
     }'
 }
 
+human_kib() {
+    local kib="${1:-0}"
+
+    if [ "$kib" -ge 1073741824 ]; then
+        awk -v k="$kib" 'BEGIN { printf "%.1f TiB", k/1073741824 }'
+    elif [ "$kib" -ge 1048576 ]; then
+        awk -v k="$kib" 'BEGIN { printf "%.1f GiB", k/1048576 }'
+    elif [ "$kib" -ge 1024 ]; then
+        awk -v k="$kib" 'BEGIN { printf "%.1f MiB", k/1024 }'
+    else
+        printf "%s KiB" "$kib"
+    fi
+}
+
 get_disk() {
     df -P / | awk 'NR==2 {
         gsub("%","",$5)
@@ -126,9 +140,9 @@ usage_bar() {
 service_status() {
 
     if systemctl is-active --quiet "$1" 2>/dev/null; then
-        printf "${GREEN}🟢 ACTIVE${RESET}"
+        printf "${GREEN}🟢   ACTIVE${RESET}"
     else
-        printf "${RED}🔴 DOWN${RESET}"
+        printf "${RED}🔴   DOWN${RESET}"
     fi
 }
 
@@ -180,7 +194,7 @@ view_overview() {
     pve="$(get_pve_version)"
     kernel="$(uname -r)"
 
-    printf "${CYAN}│${RESET} ${BOLD}${WHITE}🧠 SYSTEM${RESET}\n"
+    printf "${CYAN}│${RESET} ${BOLD}${WHITE}🧠   SYSTEM${RESET}\n"
     echo
 
     printf "${CYAN}│${RESET} CPU       ${BOLD}%3s %%${RESET}       RAM       ${BOLD}%4.1f / %4.1f GB${RESET}\n" \
@@ -218,9 +232,9 @@ view_overview() {
         [ -z "$CORES" ] && CORES="-"
 
         if [ "$STATUS" = "running" ]; then
-            STATE="${GREEN}🟢 RUNNING${RESET}"
+            STATE="${GREEN}🟢   RUNNING${RESET}"
         else
-            STATE="${RED}🔴 $STATUS${RESET}"
+            STATE="${RED}🔴   $STATUS${RESET}"
         fi
 
         printf "${CYAN}│${RESET} %-4s %-22s %b   %s CPU   %s MB\n" \
@@ -253,9 +267,9 @@ view_overview() {
         [ -z "$MEMORY" ] && MEMORY="-"
 
         if [ "$STATUS" = "running" ]; then
-            STATE="${GREEN}🟢 RUNNING${RESET}"
+            STATE="${GREEN}🟢   RUNNING${RESET}"
         else
-            STATE="${RED}🔴 $STATUS${RESET}"
+            STATE="${RED}🔴   $STATUS${RESET}"
         fi
 
         printf "${CYAN}│${RESET} %-4s %-22s %b   %s CPU   %s MB\n" \
@@ -271,7 +285,7 @@ view_overview() {
     echo
     echo "${CYAN}├──────────────────────────────────────────────────────────────${RESET}"
 
-    printf "${CYAN}│${RESET} ${BOLD}${WHITE}🌐 NETWORK${RESET}\n"
+    printf "${CYAN}│${RESET} ${BOLD}${WHITE}🌐   NETWORK${RESET}\n"
     echo
 
     printf "${CYAN}│${RESET} vmbr0      ${BOLD}%s${RESET}\n" "$(get_ip)"
@@ -283,7 +297,7 @@ view_overview() {
     printf "${CYAN}│${RESET} ${BOLD}${WHITE}⚙️  HOST SERVICES${RESET}\n"
     echo
 
-    printf "${CYAN}│${RESET} Proxmox      ${GREEN}🟢 ACTIVE${RESET}     SSH        %b\n" \
+    printf "${CYAN}│${RESET} Proxmox      ${GREEN}🟢   ACTIVE${RESET}     SSH        %b\n" \
         "$(service_status ssh)"
 
     printf "${CYAN}│${RESET} pvedaemon    %b     pvestatd   %b\n" \
@@ -295,9 +309,18 @@ view_overview() {
 
     printf "${CYAN}│${RESET} ${BOLD}${WHITE}MENU${RESET}\n"
     printf "${CYAN}│${RESET}\n"
-    printf "${CYAN}│${RESET}  [1] 🖥️  Node       [2] 🖧  VMs       [3] 📦  LXC\n"
-    printf "${CYAN}│${RESET}  [4] 💾 Storage     [5] 🌐 Network    [6] ⚙️  Services\n"
-    printf "${CYAN}│${RESET}  [7] 🛡️  SOC        [R] 🔄 Refresh    [0] ❌ Exit\n"
+
+    printf "${CYAN}│${RESET}\033[4G[1] 🖥️  Node"
+    printf "\033[28G[2] 🖧  VMs"
+    printf "\033[51G[3] 📦  LXC\n"
+
+    printf "${CYAN}│${RESET}\033[4G[4] 💾  Storage"
+    printf "\033[28G[5] 🌐  Network"
+    printf "\033[51G[6] ⚙️  Services\n"
+
+    printf "${CYAN}│${RESET}\033[4G[7] 🛡️  SOC"
+    printf "\033[28G[R] 🔄  Refresh"
+    printf "\033[51G[0] ❌  Exit\n"
 
     echo "${CYAN}└──────────────────────────────────────────────────────────────${RESET}"
 
@@ -398,18 +421,50 @@ view_lxc() {
 # ============================================================
 
 view_storage() {
-
     header
 
     echo "${CYAN}│${RESET} ${BOLD}${WHITE}💾  STORAGE${RESET}"
+    echo "${CYAN}│${RESET}"
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}Proxmox Storage${RESET}"
     echo
 
-    pvesm status 2>/dev/null
+    while read -r name type status total used avail percent; do
+        [ -z "$name" ] && continue
 
+        case "$status" in
+            active)
+                state="${GREEN}🟢   ACTIVE${RESET}"
+                ;;
+            *)
+                state="${RED}🔴   $status${RESET}"
+                ;;
+        esac
+
+        printf "${CYAN}│${RESET} %-12s %-10s %b\n" \
+            "$name" "$type" "$state"
+
+        printf "${CYAN}│${RESET}   Total:      %s\n" "$(human_kib "$total")"
+        printf "${CYAN}│${RESET}   Used:       %s\n" "$(human_kib "$used")"
+        printf "${CYAN}│${RESET}   Available:  %s\n" "$(human_kib "$avail")"
+        printf "${CYAN}│${RESET}   Usage:      %s\n" "$percent"
+        echo "${CYAN}│${RESET}"
+    done < <(
+        pvesm status 2>/dev/null |
+        awk 'NR > 1 && NF >= 7 {
+            print $1, $2, $3, $4, $5, $6, $7
+        }'
+    )
+
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}Root Filesystem${RESET}"
     echo
 
-    echo "${BOLD}${WHITE}Filesystem:${RESET}"
-    df -hT
+    df -hT / 2>/dev/null |
+        awk 'NR == 2 {
+            printf "│  %-20s %-8s %-8s %-8s %-8s %s\n",
+            "Device", "Type", "Size", "Used", "Avail", "Use%"
+            printf "│  %-20s %-8s %-8s %-8s %-8s %s\n",
+            $1, $2, $3, $4, $5, $6
+        }'
 
     echo
     echo "${CYAN}└──────────────────────────────────────────────────────────────${RESET}"
@@ -423,21 +478,120 @@ view_network() {
 
     header
 
+    local gateway
+    local vmbr_ip
+    local nic_state
+    local vmbr_state
+    local gateway_status
+    local internet_status
+    local dns_status
+    local nic_speed
+
+    gateway=$(ip route 2>/dev/null |
+        awk '/^default/ {print $3; exit}')
+
+    vmbr_ip=$(ip -4 addr show vmbr0 2>/dev/null |
+        awk '/inet / {print $2; exit}')
+
+    nic_state=$(ip -br link show nic0 2>/dev/null |
+        awk '{print $2}')
+
+    vmbr_state=$(ip -br link show vmbr0 2>/dev/null |
+        awk '{print $2}')
+
+    nic_speed=$(cat /sys/class/net/nic0/speed 2>/dev/null)
+
+    if [ -n "$nic_speed" ] && [ "$nic_speed" -gt 0 ] 2>/dev/null; then
+        if [ "$nic_speed" -ge 1000 ]; then
+            nic_speed="$((nic_speed / 1000)) Gbps"
+        else
+            nic_speed="${nic_speed} Mbps"
+        fi
+    else
+        nic_speed="N/D"
+    fi
+
+    if ping -c 1 -W 1 "$gateway" >/dev/null 2>&1; then
+        gateway_status="${GREEN}🟢   REACHABLE${RESET}"
+    else
+        gateway_status="${RED}🔴   UNREACHABLE${RESET}"
+    fi
+
+    if ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then
+        internet_status="${GREEN}🟢   ONLINE${RESET}"
+    else
+        internet_status="${RED}🔴   OFFLINE${RESET}"
+    fi
+
+    if getent hosts cloudflare.com >/dev/null 2>&1; then
+        dns_status="${GREEN}🟢   RESOLVING${RESET}"
+    else
+        dns_status="${RED}🔴   FAILED${RESET}"
+    fi
+
     echo "${CYAN}│${RESET} ${BOLD}${WHITE}🌐  NETWORK${RESET}"
-    echo
+    echo "${CYAN}│${RESET}"
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}Interfaces principales${RESET}"
+    echo "${CYAN}│${RESET}"
+    echo "${CYAN}│${RESET} Interface"
+    echo "${CYAN}│${RESET}   nic0"
+    echo "${CYAN}│${RESET}     Estado:  $([ "$nic_state" = "UP" ] && echo "${GREEN}🟢  UP${RESET}" || echo "${RED}🔴  DOWN${RESET}")"
+    echo "${CYAN}│${RESET}     Enlace:  ${nic_speed}"
+    echo "${CYAN}│${RESET}"
+    echo "${CYAN}│${RESET}   vmbr0"
+    echo "${CYAN}│${RESET}     Estado:  $([ "$vmbr_state" = "UP" ] && echo "${GREEN}🟢  UP${RESET}" || echo "${RED}🔴  DOWN${RESET}")"
+    echo "${CYAN}│${RESET}     IP:      ${vmbr_ip}"
+    echo "${CYAN}│${RESET}     Tipo:    Bridge"
+    echo "${CYAN}│${RESET}"
+    echo "${CYAN}│${RESET}"
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}Gateway${RESET}"
+    echo "${CYAN}│${RESET}"
 
-    echo "${BOLD}${WHITE}Interfaces:${RESET}"
-    ip -br addr
+    printf "${CYAN}│${RESET}   %-14s %b\n" \
+    "$gateway" "$gateway_status"
 
-    echo
-    echo "${BOLD}${WHITE}Routes:${RESET}"
-    ip route
 
-    echo
-    echo "${BOLD}${WHITE}Bridge:${RESET}"
-    ip -br link show vmbr0
+    echo "${CYAN}│${RESET}"
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}Routing${RESET}"
+    echo "${CYAN}│${RESET}"
 
-    echo
+    ip route 2>/dev/null |
+        sed 's/^/│  /'
+
+    echo "${CYAN}│${RESET}"
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}Connectivity${RESET}"
+    echo "${CYAN}│${RESET}"
+
+    printf "${CYAN}│${RESET} Gateway       %b\n" "$gateway_status"
+    printf "${CYAN}│${RESET} Internet      %b\n" "$internet_status"
+    printf "${CYAN}│${RESET} DNS           %b\n" "$dns_status"
+
+    echo "${CYAN}│${RESET}"
+    echo "${CYAN}│${RESET} ${BOLD}${WHITE}Virtual interfaces${RESET}"
+    echo "${CYAN}│${RESET}"
+
+    printf "${CYAN}│${RESET} LXC 100       "
+    if ip link show veth100i0 >/dev/null 2>&1; then
+        printf "${GREEN}🟢   PRESENT${RESET}\n"
+    else
+        printf "${YELLOW}🟡   N/A${RESET}\n"
+    fi
+
+    printf "${CYAN}│${RESET} VM 120        "
+    if ip link show tap120i0 >/dev/null 2>&1; then
+        printf "${GREEN}🟢   PRESENT${RESET}\n"
+    else
+        printf "${YELLOW}🟡   N/A${RESET}\n"
+    fi
+
+    printf "${CYAN}│${RESET} VM 121        "
+    if ip link show tap121i0 >/dev/null 2>&1; then
+        printf "${GREEN}🟢   PRESENT${RESET}\n"
+    else
+        printf "${YELLOW}🟡   N/A${RESET}\n"
+    fi
+
+    echo "${CYAN}│${RESET}"
     echo "${CYAN}└──────────────────────────────────────────────────────────────${RESET}"
 }
 
@@ -452,11 +606,11 @@ view_services() {
     echo "${CYAN}│${RESET} ${BOLD}${WHITE}⚙️  HOST SERVICES${RESET}"
     echo
 
-    printf "${CYAN}│${RESET} SSH        %b\n" "$(service_status ssh)"
-    printf "${CYAN}│${RESET} pvedaemon  %b\n" "$(service_status pvedaemon)"
-    printf "${CYAN}│${RESET} pvestatd   %b\n" "$(service_status pvestatd)"
-    printf "${CYAN}│${RESET} pveproxy   %b\n" "$(service_status pveproxy)"
-    printf "${CYAN}│${RESET} pvescheduler %b\n" "$(service_status pvescheduler)"
+    printf "${CYAN}│${RESET} SSH           %b\n" "$(service_status ssh)"
+    printf "${CYAN}│${RESET} pvedaemon     %b\n" "$(service_status pvedaemon)"
+    printf "${CYAN}│${RESET} pvestatd      %b\n" "$(service_status pvestatd)"
+    printf "${CYAN}│${RESET} pveproxy      %b\n" "$(service_status pveproxy)"
+    printf "${CYAN}│${RESET} pvescheduler  %b\n" "$(service_status pvescheduler)"
 
     echo
     echo "${CYAN}│${RESET} ${BOLD}${WHITE}Failed services:${RESET}"
@@ -477,31 +631,31 @@ view_soc() {
     echo "${CYAN}│${RESET} ${BOLD}${WHITE}🛡️  SOC SERVICES${RESET}"
     echo
 
-    printf "${CYAN}│${RESET} 📦 Wazuh LXC 100   "
+    printf "${CYAN}│${RESET} 📦  Wazuh LXC 100   "
 
     if pct status 100 2>/dev/null | grep -q "status: running"; then
-        printf "${GREEN}🟢 RUNNING${RESET}\n"
+        printf "${GREEN}🟢  RUNNING${RESET}\n"
     else
-        printf "${RED}🔴 STOPPED${RESET}\n"
+        printf "${RED}  🔴  STOPPED${RESET}\n"
     fi
 
-    printf "${CYAN}│${RESET} 🐳 Docker         "
+    printf "${CYAN}│${RESET} 🐳  Docker         "
 
     if pct exec 100 -- systemctl is-active docker >/dev/null 2>&1; then
-        printf "${GREEN}🟢 ACTIVE${RESET}\n"
+        printf "${GREEN} 🟢  ACTIVE${RESET}\n"
     else
-        printf "${YELLOW}🟡 UNKNOWN${RESET}\n"
+        printf "${YELLOW}🟡  UNKNOWN${RESET}\n"
     fi
 
     echo
 
     printf "${CYAN}│${RESET} Esta sección se ampliará posteriormente con:\n"
-    printf "${CYAN}│${RESET}   🛡️  Wazuh\n"
-    printf "${CYAN}│${RESET}   📊 Prometheus\n"
-    printf "${CYAN}│${RESET}   📈 Grafana\n"
-    printf "${CYAN}│${RESET}   📡 NDR\n"
-    printf "${CYAN}│${RESET}   🧠 CTI\n"
-    printf "${CYAN}│${RESET}   ⚡ SOAR\n"
+    printf "${CYAN}│${RESET}   🛡️   Wazuh\n"
+    printf "${CYAN}│${RESET}   📊   Prometheus\n"
+    printf "${CYAN}│${RESET}   📈   Grafana\n"
+    printf "${CYAN}│${RESET}   📡   NDR\n"
+    printf "${CYAN}│${RESET}   🧠   CTI\n"
+    printf "${CYAN}│${RESET}   ⚡   SOAR\n"
 
     echo
     echo "${CYAN}└──────────────────────────────────────────────────────────────${RESET}"
